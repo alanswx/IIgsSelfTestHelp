@@ -102,8 +102,7 @@ Each program displays either:
 ## Development
 
 The build system uses:
-- **Merlin32** v1.2 beta 2 for 65816 assembly
-- **CiderPress2** for disk image management
-- Cross-platform support (Linux/MacOS/Windows executables included)
+- **Merlin32** v1.2 beta 2 for 65816 assembly  https://brutaldeluxe.fr/products/crossdevtools/merlin/
+- **CiderPress2** for disk image management https://github.com/fadden/CiderPress2/blob/main/Install.md
 
 For more detailed development information, see `CLAUDE.md`.
