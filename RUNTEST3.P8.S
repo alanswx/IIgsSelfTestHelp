@@ -42,11 +42,15 @@ CLEAR_LOOP  LDA     #0                  ; Load a zero
             BPL     CLEAR_LOOP          ; Loop until all 5 bytes are cleared
 
             ;--- Step 2: Calculate the address of the pointer for Test #3.
-            LDA     #TEST_NUM           ; Load the test number (3)
-            ASL A                       ; Multiply by 2 to get the byte offset
-            TAX                         ; Transfer the offset to X-register
-            LDA     DIAG_TABLE,X        ; Load the 16-bit pointer from the table
-            STA     SCRATCH             ; Store it in a temporary location
+            LDA     #TEST_NUM           ; Load test number (3)
+            ASL A                       ; Multiply by 2 to get word offset
+            TAX                         ; Transfer to X-register
+            INX                         ; Skip the size byte at start of table
+            LDA     >DIAG_TABLE,X       ; Read LOW byte (force long addressing)
+            STA     SCRATCH
+            INX                         ; Next byte
+            LDA     >DIAG_TABLE,X       ; Read HIGH byte (force long addressing)
+            STA     SCRATCH+1
 
             ;--- Step 3: Call the native mode diagnostic routine.
             JSR     CALL_NATIVE_TEST
@@ -98,8 +102,10 @@ CALL_NATIVE_TEST
 JSL_TARGET  JSL $FF0000                 ; *** EXECUTE THE 16-BIT ROM TEST ***
                                         ; The $0000 part is patched at runtime.
             
+            PHP                         ; Save processor status (including carry from diagnostic)
             SEC
             XCE                         ; Switch back to 8-bit emulation mode
+            PLP                         ; Restore processor status from diagnostic
             PLP                         ; Restore original processor status
             RTS
 
@@ -111,7 +117,7 @@ PRINT_LOOP  LDA     (PRINT_PTR),Y       ; Load character from string, indexed by
             BEQ     PRINT_DONE          ; If it's zero (null), we're done
             JSR     COUT                ; Print the character
             INY                         ; Increment index
-            BRA     PRINT_LOOP          ; Loop
+            JMP     PRINT_LOOP          ; Loop
 PRINT_DONE  RTS                         ; Return from subroutine
 
 ;--- Exit the program cleanly using the ProDOS 8 MLI ---

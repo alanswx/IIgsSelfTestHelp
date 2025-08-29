@@ -24,6 +24,7 @@ PRINT_PTR   EQU     $06                 ; Zero page pointer for print routine (2
 
 ;--- Monitor Routines
 COUT        EQU     $FDED               ; 8-bit monitor character out routine
+HOME        EQU     $FC58               ; Clear screen and home cursor
 
 ;--- ROM Diagnostic Constants (from the PDF document)
 DIAG_TABLE  EQU     $FF7402             ; Start of the test pointer table in ROM
@@ -34,6 +35,15 @@ TEST_NUM    EQU     6                   ; We want to run Test #6 (Serial Chip)
 ;* MAIN PROGRAM
 ;****************************************************************
 START       
+            ;--- Step 0: Clear screen and display initial message
+            JSR     HOME                ; Clear screen
+            
+            LDA     #<MSG_START         ; Display starting message
+            STA     PRINT_PTR
+            LDA     #>MSG_START
+            STA     PRINT_PTR+1
+            JSR     PRINT_MSG
+            
             ;--- Step 1: Clear the 5-byte test status area in memory.
             LDX     #4                  ; Loop counter for 5 bytes (4 down to 0)
 CLEAR_LOOP  LDA     #0                  ; Load a zero
@@ -42,16 +52,27 @@ CLEAR_LOOP  LDA     #0                  ; Load a zero
             BPL     CLEAR_LOOP          ; Loop until all 5 bytes are cleared
 
             ;--- Step 2: Calculate the address of the pointer for Test #6.
-            LDA     #TEST_NUM           ; Load the test number (6)
-            ASL A                       ; Multiply by 2 to get the byte offset
-            TAX                         ; Transfer the offset to X-register
-            LDA     DIAG_TABLE,X        ; Load the 16-bit pointer from the table
-            STA     SCRATCH             ; Store it in a temporary location
+            LDA     #TEST_NUM           ; Load test number (6)
+            ASL A                       ; Multiply by 2 to get word offset
+            TAX                         ; Transfer to X-register
+            INX                         ; Skip the size byte at start of table
+            LDA     >DIAG_TABLE,X       ; Read LOW byte (force long addressing)
+            STA     SCRATCH
+            INX                         ; Next byte
+            LDA     >DIAG_TABLE,X       ; Read HIGH byte (force long addressing)
+            STA     SCRATCH+1
 
-            ;--- Step 3: Call the native mode diagnostic routine.
+            ;--- Step 3: Display running message
+            LDA     #<MSG_RUNNING
+            STA     PRINT_PTR
+            LDA     #>MSG_RUNNING
+            STA     PRINT_PTR+1
+            JSR     PRINT_MSG
+            
+            ;--- Step 4: Call the native mode diagnostic routine.
             JSR     CALL_NATIVE_TEST
 
-            ;--- Step 4: Check the carry flag for the result.
+            ;--- Step 5: Check the carry flag for the result.
             BCS     TEST_FAILED         ; Branch if Carry is Set (failure)
 
 ;--- Test Passed ---
@@ -61,6 +82,7 @@ TEST_PASSED
             LDA     #>MSG_PASS          ; Load high byte of message address
             STA     PRINT_PTR+1
             JSR     PRINT_MSG           ; Print the message
+            JSR     PRINT_STATUS        ; Print status register values
             JMP     EXIT_PROG           ; Then exit
 
 ;--- Test Failed ---
@@ -70,6 +92,7 @@ TEST_FAILED
             LDA     #>MSG_FAIL          ; Load high byte of message address
             STA     PRINT_PTR+1
             JSR     PRINT_MSG           ; Print the message
+            JSR     PRINT_STATUS        ; Print status register values
             JMP     EXIT_PROG           ; Then exit
 
 
@@ -98,8 +121,10 @@ CALL_NATIVE_TEST
 JSL_TARGET  JSL $FF0000                 ; *** EXECUTE THE 16-BIT ROM TEST ***
                                         ; The $0000 part is patched at runtime.
             
+            PHP                         ; Save processor status (including carry from diagnostic)
             SEC
             XCE                         ; Switch back to 8-bit emulation mode
+            PLP                         ; Restore processor status from diagnostic
             PLP                         ; Restore original processor status
             RTS
 
@@ -111,8 +136,57 @@ PRINT_LOOP  LDA     (PRINT_PTR),Y       ; Load character from string, indexed by
             BEQ     PRINT_DONE          ; If it's zero (null), we're done
             JSR     COUT                ; Print the character
             INY                         ; Increment index
-            BRA     PRINT_LOOP          ; Loop
+            JMP     PRINT_LOOP          ; Loop
 PRINT_DONE  RTS                         ; Return from subroutine
+
+;--- Print status register contents
+PRINT_STATUS
+            LDA     #<MSG_STATUS        ; Print status message
+            STA     PRINT_PTR
+            LDA     #>MSG_STATUS
+            STA     PRINT_PTR+1
+            JSR     PRINT_MSG
+            
+            LDX     #0                  ; Start with first status byte
+STATUS_LOOP
+            LDA     TST_STATUS,X        ; Get status byte
+            JSR     PRINT_HEX_BYTE      ; Print as hex
+            
+            LDA     #$20                ; Print space
+            JSR     COUT
+            
+            INX                         ; Next byte
+            CPX     #5                  ; Done all 5 bytes?
+            BNE     STATUS_LOOP
+            
+            LDA     #$8D                ; Print newline (high-bit set CR for Apple II)
+            JSR     COUT
+            RTS
+
+;--- Print a byte as hexadecimal
+PRINT_HEX_BYTE
+            PHA                         ; Save original value
+            LSR A                       ; Get high nibble
+            LSR A
+            LSR A
+            LSR A
+            JSR     PRINT_HEX_NIBBLE    ; Print high nibble
+            PLA                         ; Restore original
+            AND     #$0F                ; Get low nibble
+            JSR     PRINT_HEX_NIBBLE    ; Print low nibble
+            RTS
+
+;--- Print a nibble (0-F) as hex character
+PRINT_HEX_NIBBLE
+            CMP     #$0A                ; Is it A-F?
+            BCS     HEX_LETTER          ; Yes, handle letter
+            ADC     #$30                ; Convert 0-9 to ASCII
+            JMP     PRINT_HEX_CHAR
+HEX_LETTER
+            ADC     #$36                ; Convert A-F to ASCII (carry already set)
+PRINT_HEX_CHAR
+            JSR     COUT                ; Print the character
+            RTS
 
 ;--- Exit the program cleanly using the ProDOS 8 MLI ---
 EXIT_PROG
@@ -126,13 +200,35 @@ EXIT_PROG
 ;****************************************************************
 SCRATCH     DS      2                   ; Temporary storage for the routine's address
 
-MSG_PASS    ASC     "Test 6 (Serial): PASS"
-            ASC     $0D                 ; Carriage return
+MSG_START   ASC     "Apple IIGS Serial Chip Test (Test #6)"
+            ASC     $8D
+            ASC     "Initializing..."
+            ASC     $8D,$8D
+            HEX     00
+
+MSG_RUNNING ASC     "Running serial chip diagnostics..."
+            ASC     $8D
+            HEX     00
+
+MSG_PASS    ASC     $0D
+            ASC     "Test 6 (Serial): PASS"
+            ASC     $8D
+            ASC     "Serial chip is functioning correctly."
+            ASC     $8D
             HEX     00                  ; Null terminator for 8-bit print routine
 
-MSG_FAIL    ASC     "Test 6 (Serial): FAIL"
-            ASC     $0D                 ; Carriage return
+MSG_FAIL    ASC     $0D
+            ASC     "Test 6 (Serial): FAIL"
+            ASC     $8D
+            ASC     "Serial chip test failed."
+            ASC     $8D
             HEX     00                  ; Null terminator
+
+MSG_STATUS  ASC     "Status registers: "
+            HEX     00
+
+MSG_HEX     ASC     "$00 "
+            HEX     00
 
             END
 
